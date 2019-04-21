@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-urlresolver XBMC Addon
-Copyright (C) 2011 t0mm0
+urlresolver Kodi Plugin
+Copyright (C) 2018 Gujal
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -16,35 +16,48 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program. If not, see <http://www.gnu.org/licenses/>.
 """
-
+import re
+import urllib2
 from lib import helpers
 from urlresolver import common
-from __generic_resolver__ import GenericResolver
+from urlresolver.resolver import UrlResolver, ResolverError
 
-class RapidVideoComResolver(GenericResolver):
+
+class RapidVideoResolver(UrlResolver):
     name = "rapidvideo.com"
-    domains = ["rapidvideo.com", "raptu.com"]
-    pattern = '(?://|\.)((?:rapidvideo|raptu)\.com)/(?:[ev]/|embed/|\?v=)?([0-9A-Za-z]+)'
+    domains = ["rapidvideo.com"]
+    pattern = '(?://|\.)(rapidvideo\.com)/(?:[ev]/|embed/|\?v=|embed/\?v=)?([0-9A-Za-z]+)'
+
+    def __init__(self):
+        self.net = common.Net()
 
     def get_media_url(self, host, media_id):
+        web_url = self.get_url(host, media_id)
+        headers = {'User-Agent': common.FF_USER_AGENT}
+        
+        try:
+            html = self.net.http_GET(web_url, headers=headers).content
+        except  urllib2.HTTPError as e:
+            if e.code == 404:
+                raise ResolverError("Video not found")
 
-        url = self.get_url(host, media_id)
-        net = common.Net()
-        headers = {'User-Agent': common.RAND_UA}
-
-        response = net.http_GET(url, headers=headers)
-        response_headers = response.get_headers(as_dict=True)
-        headers.update({'Referer': url})
-        cookie = response_headers.get('Set-Cookie', None)
-        if cookie:
-            headers.update({'Cookie': cookie})
-            html = response.content
-
-        source_list = helpers.scrape_sources(html, generic_patterns = True)
-        if source_list and len(source_list[0]) > 1:
-            source_list[0][::-1]
-        source = helpers.pick_source(source_list)
-        return source + helpers.append_headers(headers)
+        srcs = re.findall(r'href="(%s&q=[^"]+)' % web_url, html, re.I)
+        if srcs:
+            sources = []
+            for src in srcs:
+                shtml = self.net.http_GET(src, headers=headers).content
+                strurl = helpers.parse_html5_source_list(shtml)
+                if strurl:
+                    sources.append(strurl[0])
+            sources = helpers.sort_sources_list(sources)
+        else:
+            sources = helpers.parse_html5_source_list(html)
+        
+        if len(sources) > 0:
+            return helpers.pick_source(sources) + helpers.append_headers(headers)
+        else:
+            raise ResolverError("Video not found")
+            
 
     def get_url(self, host, media_id):
-        return self._default_get_url(host, media_id, template='https://{host}/embed/{media_id}?q=all')
+        return self._default_get_url(host, media_id, template='https://www.{host}/v/{media_id}')
